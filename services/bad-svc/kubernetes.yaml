@@ -1,0 +1,49 @@
+# Golden-path deployment for bad-svc.
+# Guardrails baked in: resource limits (no noisy-neighbor), readiness probe,
+# and a single replica min so cost is predictable until you add HPA yourself.
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: bad-svc
+  labels:
+    app: bad-svc
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: bad-svc
+  template:
+    metadata:
+      labels:
+        app: bad-svc
+    spec:
+      containers:
+        - name: bad-svc
+          image: registry.example.com/bad-svc:latest
+          ports:
+            - containerPort: 8080
+          readinessProbe:
+            httpGet:
+              path: /health
+              port: 8080
+            initialDelaySeconds: 3
+            periodSeconds: 10
+          resources:
+            requests:
+              cpu: "placeholder: {{K8S_CPU}}"
+              memory: "128Mi"
+            limits:
+              cpu: "500m"
+              memory: "512Mi"
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: bad-svc
+spec:
+  selector:
+    app: bad-svc
+  ports:
+    - protocol: TCP
+      port: 80
+      targetPort: 8080

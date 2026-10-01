@@ -1,0 +1,49 @@
+# Golden-path deployment for {{SERVICE_NAME}}.
+# Guardrails baked in: resource limits (no noisy-neighbor), readiness probe,
+# and a single replica min so cost is predictable until you add HPA yourself.
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{SERVICE_NAME}}
+  labels:
+    app: {{SERVICE_NAME}}
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: {{SERVICE_NAME}}
+  template:
+    metadata:
+      labels:
+        app: {{SERVICE_NAME}}
+    spec:
+      containers:
+        - name: {{SERVICE_NAME}}
+          image: registry.example.com/{{SERVICE_NAME}}:latest
+          ports:
+            - containerPort: {{SERVICE_PORT}}
+          readinessProbe:
+            httpGet:
+              path: /health
+              port: {{SERVICE_PORT}}
+            initialDelaySeconds: 3
+            periodSeconds: 10
+          resources:
+            requests:
+              cpu: "100m"
+              memory: "128Mi"
+            limits:
+              cpu: "500m"
+              memory: "512Mi"
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{SERVICE_NAME}}
+spec:
+  selector:
+    app: {{SERVICE_NAME}}
+  ports:
+    - protocol: TCP
+      port: 80
+      targetPort: {{SERVICE_PORT}}
