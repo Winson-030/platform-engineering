@@ -46,8 +46,31 @@ $ lint <missing k8s>           → FAIL, exit 1, actionable messages
 $ verify                       → probe scaffolds + lints + tears down cleanly
 ```
 
+## Commands
+
+```bash
+python3 platformctl.py scaffold <name> --port 8080   # create services/<name>/
+python3 platformctl.py lint services/<name>           # check guardrails
+python3 platformctl.py render <name> --port 8080      # offline deploy pre-check
+python3 platformctl.py verify                         # scaffold+lint+teardown probe
+```
+
+`render` is the deploy pre-check. It renders the golden path to a temp dir and
+prints the guardrails (image, replicas, cpu/mem requests & limits, readiness
+probe) so you can eyeball the manifest **without a cluster**. `kubectl apply`
+itself still needs a real cluster — this demo runs headless, so `render` is the
+verifiable offline stand-in for that step.
+
+## Verified (2026-10-02)
+
+```
+$ render my-api --port 9000 → image / replicas / requests / limits / probe printed
+$ verify                    → scaffold + lint + teardown, no stray files
+$ lint services/demo-api    → ok — passes golden-path guardrails
+```
+
 ## Next week (planned)
 
-- Add a `deploy` subcommand that renders to a temp dir and calls `kubectl apply`
-  (dry-run `--dry-run=client` first — no cluster required for the demo).
-- Wire lint into a CI step so broken services can't be merged.
+- Wire `lint` into a CI step so broken services can't be merged.
+- Add a real `deploy` subcommand (renders then `kubectl apply`) once a demo
+  cluster (k3d/minikube) is available — `render` already covers the offline half.

@@ -83,15 +83,87 @@ def cmd_lint(args: argparse.Namespace) -> int:
     return 0
 
 
+def _render_to(dest: Path) -> None:
+    """Copy template -> dest, rendering {{SERVICE_NAME}}/{{SERVICE_PORT}}."""
+    shutil.copytree(TEMPLATES / "service", dest)
+    for f in dest.rglob("*"):
+        if not f.is_file():
+            continue
+        try:
+            text = f.read_text(encoding="utf-8")
+        except (UnicodeDecodeError, OSError):
+            continue
+        if "{{" in text:
+            text = text.replace("{{SERVICE_NAME}}", dest.name)
+            text = text.replace("{{SERVICE_PORT}}", "8080")
+            f.write_text(text, encoding="utf-8")
+
+
+def _summarize_manifest(service: str) -> dict[str, str]:
+    """Extract the golden-path guardrails from a rendered k8s manifest.
+
+    Regex over a controlled template shape — not a YAML parser. Ceiling: only
+    matches this repo's own rendered layout; if kubernetes.yaml is reformatted
+    substantially, add an actual yaml.safe_load and drop these regexes.
+    """
+    import re
+
+    path = TEMPLATES / "service" / "kubernetes.yaml"
+    text = path.read_text(encoding="utf-8").replace("{{SERVICE_NAME}}", service)
+    text = text.replace("{{SERVICE_PORT}}", "8080")
+
+    def grab(pattern: str) -> str:
+        m = re.search(pattern, text, re.MULTILINE)
+        return m.group(1).strip().strip('"') if m else "?"
+
+    def grab2(pattern: str) -> str:
+        m = re.search(pattern, text, re.MULTILINE)
+        if not m:
+            return "?"
+        return f"{m.group(1).strip().strip(chr(34))} / {m.group(2).strip().strip(chr(34))}"
+
+    return {
+        "replicas": grab(r"replicas:\s*(\d+)"),
+        "image": grab(r"image:\s*(\S+)"),
+        "cpu_req": grab(r"cpu:\s*\"?([\d.]+m)\"?"),
+        "mem_req": grab(r"memory:\s*\"?(\S+)\"?"),
+        "limits": grab2(
+            r"limits:\n\s+cpu:\s*\"?([\d.]+m)\"?[^\n]*\n\s+memory:\s*\"?(\S+)\"?"
+        ),
+        "probe_path": grab(r"path:\s*(/\w+)"),
+    }
+
+
+def cmd_render(args: argparse.Namespace) -> int:
+    """Render the golden path to a temp dir and summarize guardrails. Offline:
+    no cluster needed — this is the deploy pre-check (kubectl apply needs a
+    real cluster, which the demo does not have)."""
+    import tempfile
+
+    with tempfile.TemporaryDirectory() as tmp:
+        dest = Path(tmp) / args.name
+        _render_to(dest)
+        svc = _summarize_manifest(args.name)
+        print(f"rendered {args.name} -> temp dir (no cluster required)")
+        print(f"  image         : {svc['image']}")
+        print(f"  replicas      : {svc['replicas']}")
+        print(f"  requests : cpu {svc['cpu_req']} / mem {svc['mem_req']}")
+        print(f"  limits   : {svc['limits']}")
+        print(f"  readiness     : GET {svc['probe_path']} (port {args.port})")
+    return 0
+
+
 def cmd_verify(args: argparse.Namespace) -> int:
-    """Scaffold, lint, and tear down a throwaway service. CI-style smoke test."""
-    probe = Path("services/__verify__")
-    if probe.exists():
-        shutil.rmtree(probe)
-    rc_scaff = cmd_scaffold(argparse.Namespace(name="__verify__", port=8080))
-    rc_lint = cmd_lint(args=argparse.Namespace(path=str(probe)))
-    shutil.rmtree(probe, ignore_errors=True)
-    return rc_scaff or rc_lint
+    """Scaffold, lint, and tear down a throwaway service. CI-style smoke test.
+
+    Refactored onto _render_to (no stray services/__verify__ on disk)."""
+    import tempfile
+
+    with tempfile.TemporaryDirectory() as tmp:
+        probe = Path(tmp) / "__verify__"
+        _render_to(probe)
+        rc_lint = cmd_lint(args=argparse.Namespace(path=str(probe)))
+    return rc_lint
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -109,6 +181,14 @@ def main(argv: list[str] | None = None) -> int:
 
     v = sub.add_parser("verify", help="scaffold+lint+teardown a probe service")
     v.set_defaults(func=cmd_verify)
+
+    r = sub.add_parser(
+        "render",
+        help="render golden path to temp dir, summarize guardrails (offline)",
+    )
+    r.add_argument("name")
+    r.add_argument("--port", type=int, default=8080)
+    r.set_defaults(func=cmd_render)
 
     args = p.parse_args(argv)
     return args.func(args)
