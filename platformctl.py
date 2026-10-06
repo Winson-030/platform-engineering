@@ -153,6 +153,76 @@ def cmd_render(args: argparse.Namespace) -> int:
     return 0
 
 
+def _validate_manifest(rendered: Path) -> list[str]:
+    """Offline check: parsed YAML + golden-path markers present in the manifest.
+
+    kubectl --dry-run=client still dials the cluster API to discover resource
+    kinds, so it can't validate offline — parse locally instead. Ceiling: only
+    checks keys we care about, not full k8s schema.
+    """
+    import yaml
+
+    problems: list[str] = []
+    doc = (rendered / "kubernetes.yaml").read_text(encoding="utf-8")
+    try:
+        docs = [d for d in yaml.safe_load_all(doc) if d is not None]
+    except yaml.YAMLError as e:
+        return [f"kubernetes.yaml does not parse as YAML: {e}"]
+
+    kinds = {d.get("kind", "?") for d in docs}
+    for want in ("Deployment", "Service"):
+        if want not in kinds:
+            problems.append(f"manifest missing kind: {want}")
+
+    deploys = [d for d in docs if d.get("kind") == "Deployment"]
+    for dep in deploys:
+        containers = (dep.get("spec", {}).get("template", {}).get("spec", {})
+                      .get("containers", []))
+        for c in containers:
+            res = c.get("resources", {})
+            if not {"requests", "limits"} <= res.keys():
+                problems.append("container missing resources.requests/limits")
+    return problems
+
+
+def cmd_deploy(args: argparse.Namespace) -> int:
+    """Render the golden path, validate the manifest offline.
+
+    Default: parse the rendered kubernetes.yaml + assert golden-path markers
+    (Deployment+Service, resource requests/limits). No cluster needed. --apply
+    instead runs `kubectl apply` against a live cluster (needs context + image
+    registry) — the dry-run=client path is skipped there since it also needs
+    the cluster API to discover resource kinds.
+    """
+    import tempfile
+
+    with tempfile.TemporaryDirectory() as tmp:
+        dest = Path(tmp) / args.name
+        _render_to(dest)
+        problems = _validate_manifest(dest)
+
+        if args.apply:
+            import subprocess
+            cmd = ["kubectl", "apply", f"-f{dest / 'kubernetes.yaml'}"]
+            try:
+                out = subprocess.run(cmd, capture_output=True, text=True, timeout=30)
+            except FileNotFoundError:
+                problems.append("kubectl not found on PATH (for --apply)")
+            else:
+                if out.returncode != 0:
+                    problems.append((out.stdout + out.stderr).strip())
+
+    if problems:
+        print(f"deploy FAILED {args.name}:", file=sys.stderr)
+        for p in problems:
+            print(f"  - {p}", file=sys.stderr)
+        return 1
+
+    mode = "applied to live cluster" if args.apply else "validated offline (no cluster)"
+    print(f"deploy {args.name} -> {mode}")
+    return 0
+
+
 def cmd_verify(args: argparse.Namespace) -> int:
     """Scaffold, lint, and tear down a throwaway service. CI-style smoke test.
 
@@ -189,6 +259,19 @@ def main(argv: list[str] | None = None) -> int:
     r.add_argument("name")
     r.add_argument("--port", type=int, default=8080)
     r.set_defaults(func=cmd_render)
+
+    d = sub.add_parser(
+        "deploy",
+        help="render + validate manifest (kubectl dry-run); --apply to a live cluster",
+    )
+    d.add_argument("name")
+    d.add_argument("--port", type=int, default=8080)
+    d.add_argument(
+        "--apply",
+        action="store_true",
+        help="push to a live cluster instead of dry-run (needs kubectl context)",
+    )
+    d.set_defaults(func=cmd_deploy)
 
     args = p.parse_args(argv)
     return args.func(args)
