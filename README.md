@@ -69,8 +69,33 @@ $ verify                    → scaffold + lint + teardown, no stray files
 $ lint services/demo-api    → ok — passes golden-path guardrails
 ```
 
+## Week 3 — deploy subcommand (2026-10-06)
+
+`deploy <name>` renders the golden path and validates the manifest **offline**
+(no cluster). Default path parses `kubernetes.yaml` with PyYAML and asserts the
+golden-path k8s markers (Deployment + Service present, container resource
+requests/limits). `--apply` instead runs `kubectl apply` against a live cluster
+(needs a real kubectl context + image registry).
+
+```
+$ deploy my-api --port 9000  → validated offline (no cluster)
+$ deploy <resource-less>     → FAIL, actionable message
+$ deploy services/bad-svc    → ok — passes both (weak fixture; a real bad service
+                               would fail lint for unrendered placeholders)
+```
+
+> `deploy` and `lint` are complementary: `deploy` checks the manifest is valid
+> K8s YAML with golden-path *semantics*; `lint` checks scaffolding *cleanliness*
+> (files present, no unrendered placeholders). A service that ships half-baked
+> fails lint; one that's valid but resource-less fails deploy.
+
+Note: `kubectl --dry-run=client` still dials the cluster API to discover resource
+kinds, so it cannot validate offline — hence the local PyYAML parse. Ceiling: the
+offline check asserts keys we care about, not full k8s schema (lint covers the
+rest).
+
 ## Next week (planned)
 
 - Wire `lint` into a CI step so broken services can't be merged.
-- Add a real `deploy` subcommand (renders then `kubectl apply`) once a demo
-  cluster (k3d/minikube) is available — `render` already covers the offline half.
+- Add a real `deploy --apply` path against a demo cluster (k3d/minikube) once one
+  is available — offline validation already covers the pre-check half.
