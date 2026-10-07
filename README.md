@@ -94,8 +94,23 @@ kinds, so it cannot validate offline — hence the local PyYAML parse. Ceiling: 
 offline check asserts keys we care about, not full k8s schema (lint covers the
 rest).
 
+## Week 4 — IDP CI gate (2026-10-07)
+
+`.github/workflows/idp-ci.yml` runs `platformctl.py lint` on every service
+directory **changed by the push or PR** (`git diff`), so a broken service can't
+merge while untouched fixtures (like `bad-svc2`) don't fail the build.
+
+```bash
+# Local equivalent of the CI step:
+python3 platformctl.py lint services/your-api   # exit 0 = mergeable
+python3 platformctl.py lint services/bad-svc2   # exit 1 = blocked
+```
+
+- Stdlib-only: `lint` needs no pip installs (PyYAML ships with CPython ≥3.11), so
+  the gate itself can't break on a missing dependency.
+- Only changed service dirs are linted → fixtures and docs don't block merges.
+
 ## Next week (planned)
 
-- Wire `lint` into a CI step so broken services can't be merged.
 - Add a real `deploy --apply` path against a demo cluster (k3d/minikube) once one
   is available — offline validation already covers the pre-check half.
