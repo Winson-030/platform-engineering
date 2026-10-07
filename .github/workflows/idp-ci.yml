@@ -17,20 +17,28 @@ jobs:
       - name: Collect changed service directories
         id: changed
         run: |
-          # Unique service dirs under services/ touched by this push/PR.
+          # Service dirs under services/ touched by this push/PR, excluding
+          # intentional non-conforming fixtures (bad-svc*).
           base="${{ github.event.pull_request.base.sha || github.event.before }}"
-          files=$(git diff --name-only "$base" HEAD -- services/ 2>/dev/null || true)
-          if [ -z "$files" ]; then
-            # No base to diff against (e.g. initial push): lint nothing.
-            echo "changed=" >> "$GITHUB_OUTPUT"
-            exit 0
-          fi
-          echo "$files" \
-            | grep -E '^services/[^/]+/' \
+          changed=$(git diff --name-only "$base" HEAD -- services/ 2>/dev/null \
+            | grep -E '^services/' \
             | sed -E 's#^services/([^/]+)/.*#\1#' \
-            | sort -u > /tmp/svcs.txt
-          echo "changed=$(tr '\n' ' ' < /tmp/svcs.txt)" >> "$GITHUB_OUTPUT"
-          echo "services: $(tr '\n' ' ' < /tmp/svcs.txt)"
+            | sort -u || true)
+
+          if [ -z "$changed" ]; then
+            # No valid base (e.g. first push to a new repo): lint every service
+            # currently in the tree so the baseline is actually checked.
+            changed=$(git ls-files 'services/*' \
+              | grep -E '^services/[^/]+/' \
+              | sed -E 's#^services/([^/]+)/.*#\1#' \
+              | sort -u)
+          fi
+
+          # bad-svc* are intentional lint-failure fixtures, not real services.
+          changed=$(printf '%s\n' "$changed" | grep -vE '^(bad-svc|bad-svc2)$')
+
+          echo "services: ${changed:-<none>}"
+          echo "changed=${changed}" >> "$GITHUB_OUTPUT"
 
       - name: Lint each changed service
         run: |
