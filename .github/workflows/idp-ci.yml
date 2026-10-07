@@ -1,0 +1,42 @@
+name: IDP CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+# platformctl.py lint is stdlib-only (PyYAML ships with CPython >=3.11),
+# so no pip installs are needed — the gate itself can't break on deps.
+jobs:
+  lint-services:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Collect changed service directories
+        id: changed
+        run: |
+          # Unique service dirs under services/ touched by this push/PR.
+          base="${{ github.event.pull_request.base.sha || github.event.before }}"
+          files=$(git diff --name-only "$base" HEAD -- services/ 2>/dev/null || true)
+          if [ -z "$files" ]; then
+            # No base to diff against (e.g. initial push): lint nothing.
+            echo "changed=" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          echo "$files" \
+            | grep -E '^services/[^/]+/' \
+            | sed -E 's#^services/([^/]+)/.*#\1#' \
+            | sort -u > /tmp/svcs.txt
+          echo "changed=$(tr '\n' ' ' < /tmp/svcs.txt)" >> "$GITHUB_OUTPUT"
+          echo "services: $(tr '\n' ' ' < /tmp/svcs.txt)"
+
+      - name: Lint each changed service
+        run: |
+          set -e
+          for svc in ${{ steps.changed.outputs.changed }}; do
+            echo "::group::lint services/$svc"
+            python3 platformctl.py lint "services/$svc"
+            echo "::endgroup::"
+          done
